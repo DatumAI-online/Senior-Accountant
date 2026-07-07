@@ -156,3 +156,4 @@ descriptive error message — it never silently fabricates a result.
 - Add automated tests (`pytest` + `httpx.AsyncClient`) for the routes and a
   mocked Claude service.
 "# datum-skill-brain" 
+"# datum-skill-brain" 
