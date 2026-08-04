@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      # POSTGRES_USER becomes a Postgres superuser in this image, which is
+      # a superset of the CREATEROLE/CREATEDB grants datumai_admin needs to
+      # run migrations (including CREATE ROLE for the two application
+      # roles). Fine for local dev; a real deployment should provision
+      # datumai_admin with the narrower explicit grants instead of full
+      # superuser — see DATUM_AI_BOOKKEEPING_TEAM_PLAN.md Section 10.1.
+      POSTGRES_USER: datumai_admin
+      POSTGRES_PASSWORD: datumai_admin_dev_pw
+      POSTGRES_DB: datumai_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - datumai_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U datumai_admin -d datumai_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ADMIN_DATABASE_URL: "postgresql+psycopg2://datumai_admin:datumai_admin_dev_pw@db:5432/datumai_dev"
+      AI_SERVICE_DATABASE_URL: "postgresql+psycopg2://datumai_ai_service:datumai_ai_service_dev_pw@db:5432/datumai_dev"
+      CPA_SERVICE_DATABASE_URL: "postgresql+psycopg2://datumai_cpa_service:datumai_cpa_service_dev_pw@db:5432/datumai_dev"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      JWT_SECRET_KEY: "${JWT_SECRET_KEY:-dev-only-change-me}"
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+volumes:
+  datumai_pg_data:

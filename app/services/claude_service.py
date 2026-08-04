@@ -1,24 +1,26 @@
 """
-Thin wrapper around the Anthropic Claude API.
+Transaction classification, now implemented on top of the shared
+ClaudeSkillClient (app/services/claude_client.py) instead of calling the
+Anthropic SDK directly. Public interface (ClaudeClassificationService,
+ClaudeServiceError, get_claude_service) is unchanged so the existing
+/api/v1/classify route keeps working as-is.
 
-Responsible for:
-- Building the classification prompt
-- Calling the Messages API with a forced-JSON instruction
-- Parsing and validating Claude's response into our schema
-- Raising clean, typed exceptions the API layer can translate to HTTP errors
+This is the first Skill in the codebase, versioned as "transaction_
+classification" v1 — the reference pattern the Intake Bookkeeper agent's
+own Skills (app/agents/intake_bookkeeper/skill.py) follow.
 """
 
 import json
 import logging
-import re
-
-import anthropic
-from anthropic import APIConnectionError, APIStatusError, APITimeoutError
 
 from app.core.config import get_settings
 from app.schemas.transaction import TransactionClassification, TransactionIn
+from app.services.claude_client import ClaudeSkillClient, ClaudeSkillError
 
 logger = logging.getLogger(__name__)
+
+SKILL_NAME = "transaction_classification"
+SKILL_VERSION = "v1"
 
 SYSTEM_PROMPT = """\
 You are an expert bookkeeper and tax accountant AI embedded in an accounting \
@@ -50,19 +52,20 @@ class ClaudeServiceError(Exception):
 
 
 class ClaudeClassificationService:
-    """Encapsulates all interaction with the Anthropic API for classification."""
+    """Encapsulates all interaction with Claude for transaction classification."""
 
     def __init__(self) -> None:
         settings = get_settings()
-        if not settings.anthropic_api_key:
-            logger.warning(
-                "ANTHROPIC_API_KEY is not set. Requests to Claude will fail."
-            )
-        self._client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        self._model = settings.claude_model
-        self._max_tokens = settings.claude_max_tokens
+        self._skill = ClaudeSkillClient(
+            skill_name=SKILL_NAME,
+            skill_version=SKILL_VERSION,
+            system_prompt=SYSTEM_PROMPT,
+            model=settings.claude_model,
+            max_tokens=settings.claude_max_tokens,
+        )
 
-    def _build_user_prompt(self, transaction: TransactionIn) -> str:
+    @staticmethod
+    def _build_user_prompt(transaction: TransactionIn) -> str:
         fields = {
             "description": transaction.description,
             "amount": transaction.amount,
@@ -80,64 +83,16 @@ class ClaudeClassificationService:
             f"{json.dumps(fields, indent=2)}"
         )
 
-    @staticmethod
-    def _extract_json(raw_text: str) -> dict:
-        """
-        Extract a JSON object from Claude's raw text output.
-
-        Claude is instructed to return pure JSON, but this defensively strips
-        markdown code fences if the model adds them anyway.
-        """
-        text = raw_text.strip()
-        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-        if fenced:
-            text = fenced.group(1)
-
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError as exc:
-            # Fall back to grabbing the first {...} block in the text.
-            brace_match = re.search(r"\{.*\}", text, re.DOTALL)
-            if brace_match:
-                try:
-                    return json.loads(brace_match.group(0))
-                except json.JSONDecodeError:
-                    pass
-            raise ClaudeServiceError(
-                f"Could not parse JSON from Claude response: {exc}"
-            ) from exc
-
     def classify(self, transaction: TransactionIn) -> TransactionClassification:
         """Call Claude to classify a transaction and return a validated result."""
+        content_blocks = [{"type": "text", "text": self._build_user_prompt(transaction)}]
         try:
-            response = self._client.messages.create(
-                model=self._model,
-                max_tokens=self._max_tokens,
-                system=SYSTEM_PROMPT,
-                messages=[
-                    {"role": "user", "content": self._build_user_prompt(transaction)}
-                ],
-            )
-        except APITimeoutError as exc:
-            raise ClaudeServiceError("Claude API request timed out.") from exc
-        except APIConnectionError as exc:
-            raise ClaudeServiceError("Could not connect to Claude API.") from exc
-        except APIStatusError as exc:
-            raise ClaudeServiceError(
-                f"Claude API returned an error status {exc.status_code}: {exc.message}"
-            ) from exc
-
-        text_blocks = [
-            block.text for block in response.content if getattr(block, "type", None) == "text"
-        ]
-        raw_text = "".join(text_blocks).strip()
-        if not raw_text:
-            raise ClaudeServiceError("Claude returned an empty response.")
-
-        parsed = self._extract_json(raw_text)
+            result = self._skill.call(content_blocks)
+        except ClaudeSkillError as exc:
+            raise ClaudeServiceError(str(exc)) from exc
 
         try:
-            return TransactionClassification.model_validate(parsed)
+            return TransactionClassification.model_validate(result.data)
         except Exception as exc:  # pydantic ValidationError, etc.
             raise ClaudeServiceError(
                 f"Claude response did not match expected schema: {exc}"

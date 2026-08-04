@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # datumai_admin becomes a Postgres superuser in this image, which
+          # is what lets Alembic migration 0002 CREATE ROLE the two
+          # narrower application roles. See docker-compose.yml's comment
+          # for the same note about a real deployment needing a tighter
+          # grant set instead of superuser.
+          POSTGRES_USER: datumai_admin
+          POSTGRES_PASSWORD: datumai_admin_dev_pw
+          POSTGRES_DB: datumai_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U datumai_admin -d datumai_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run test suite
+        env:
+          ANTHROPIC_API_KEY: sk-ant-test-not-a-real-key
+          JWT_SECRET_KEY: ci-test-secret
+        run: pytest tests/ -v

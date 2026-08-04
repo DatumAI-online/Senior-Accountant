@@ -4,3 +4,16 @@ anthropic==0.40.0
 pydantic==2.10.3
 pydantic-settings==2.7.0
 python-dotenv==1.0.1
+sqlalchemy==2.0.36
+alembic==1.14.0
+psycopg2-binary==2.9.10
+pyjwt==2.10.1
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+python-multipart==0.0.20
+pypdf==5.1.0
+
+# --- Dev / test ---
+pytest==8.3.4
+pytest-cov==6.0.0
+httpx==0.28.1
