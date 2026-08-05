@@ -19,6 +19,7 @@ built) and is flagged as follow-up work, not silently assumed correct.
 
 import hashlib
 from dataclasses import dataclass, field
+from datetime import date
 from uuid import UUID
 
 from sqlalchemy import select
@@ -35,11 +36,12 @@ from app.agents.intake_bookkeeper.tools import (
     resolve_gl_account,
     utcnow,
 )
-from app.models.accounting_period import GLAccount
+from app.models.accounting_period import AccountingPeriod, GLAccount
 from app.models.document import ExtractedDocumentData, SourceDocument
 from app.models.enums import (
     ActorType,
     AgentType,
+    CloseStatus,
     DocumentType,
     EntryStatus,
     ExceptionSeverity,
@@ -50,6 +52,7 @@ from app.models.enums import (
 from app.models.exception_record import ExceptionRecord
 from app.models.journal_entry import JournalEntryLine, ProposedJournalEntry
 from app.models.workflow import WorkflowRun
+from app.services.accounting.close_state_machine import assert_close_transition_allowed
 from app.services.accounting.entry_state_machine import assert_transition_allowed
 from app.services.accounting.validation import (
     AccountingValidationError,
@@ -73,6 +76,44 @@ def _content_hash(*, raw_text: str | None, file_bytes: bytes | None) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _parse_document_date(document_date: str | None) -> date | None:
+    """Best-effort ISO-8601 date parse of Claude's extracted document_date.
+    Returns None (not today's date) on anything unparseable — callers fall
+    back to created_at.date(), which is a more honest "we don't know"
+    signal than silently substituting today's date."""
+    if not document_date:
+        return None
+    try:
+        return date.fromisoformat(document_date.strip())
+    except (ValueError, AttributeError):
+        return None
+
+
+def _advance_period_to_processing(db: Session, *, period_id: UUID) -> None:
+    """Bumps AccountingPeriod.close_status forward to PROCESSING the first
+    time a document is handled for a period — not_started ->
+    collecting_documents -> processing, both AI_INTAKE-only transitions.
+    A no-op once the period is already past PROCESSING (e.g. a later
+    document arriving mid-reconciliation shouldn't rewind the close)."""
+    period = db.get(AccountingPeriod, period_id)
+    if period.close_status == CloseStatus.NOT_STARTED:
+        assert_close_transition_allowed(
+            from_status=CloseStatus.NOT_STARTED,
+            to_status=CloseStatus.COLLECTING_DOCUMENTS,
+            actor_role=UserRole.AI_INTAKE,
+        )
+        period.close_status = CloseStatus.COLLECTING_DOCUMENTS
+        db.flush()
+    if period.close_status == CloseStatus.COLLECTING_DOCUMENTS:
+        assert_close_transition_allowed(
+            from_status=CloseStatus.COLLECTING_DOCUMENTS,
+            to_status=CloseStatus.PROCESSING,
+            actor_role=UserRole.AI_INTAKE,
+        )
+        period.close_status = CloseStatus.PROCESSING
+        db.flush()
+
+
 def run_intake_pipeline(
     db: Session,
     *,
@@ -85,6 +126,8 @@ def run_intake_pipeline(
     raw_text: str | None = None,
     file_bytes: bytes | None = None,
 ) -> IntakeRunResult:
+    _advance_period_to_processing(db, period_id=period_id)
+
     content_hash = _content_hash(raw_text=raw_text, file_bytes=file_bytes)
 
     duplicate = db.scalar(
@@ -266,6 +309,7 @@ def run_intake_pipeline(
         status=EntryStatus.PENDING_REVIEW,
         description=extracted.description,
         confidence=classification.confidence,
+        entry_date=_parse_document_date(extracted.document_date),
         source_document_id=source_document.id,
         created_by_user_id=uploaded_by,
     )

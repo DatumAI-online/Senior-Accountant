@@ -13,21 +13,29 @@ module. See app/api/routes_cpa_review.py for the only code path that can.
 
 import base64
 import io
-from datetime import datetime, timezone
 from uuid import UUID
 
 from pypdf import PdfReader
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agents.common.tools import flag_exception, log_audit_event, log_tool_invocation, utcnow
 from app.agents.intake_bookkeeper.schemas import ClassificationResult, ExtractedFields
 from app.agents.intake_bookkeeper.skill import get_classification_client, get_extraction_client
 from app.models.accounting_period import GLAccount
-from app.models.audit_event import AuditEvent
-from app.models.enums import ActorType, ExceptionSeverity, ExceptionStatus, ExceptionType
-from app.models.exception_record import ExceptionRecord
-from app.models.workflow import ToolInvocation
 from app.services.claude_client import ClaudeSkillError
+
+__all__ = [
+    "DocumentTextExtractionError",
+    "build_document_content_blocks",
+    "extract_document_data",
+    "classify_transaction",
+    "resolve_gl_account",
+    "flag_exception",
+    "log_audit_event",
+    "log_tool_invocation",
+    "utcnow",
+]
 
 
 class DocumentTextExtractionError(Exception):
@@ -123,85 +131,3 @@ def resolve_gl_account(db: Session, *, client_id: UUID, code: str) -> GLAccount 
             GLAccount.client_id == client_id, GLAccount.code == code, GLAccount.is_active == True  # noqa: E712
         )
     )
-
-
-def flag_exception(
-    db: Session,
-    *,
-    client_id: UUID,
-    period_id: UUID | None,
-    related_entry_id: UUID | None,
-    exception_type: ExceptionType,
-    severity: ExceptionSeverity,
-    description: str,
-    detected_by: str,
-) -> ExceptionRecord:
-    record = ExceptionRecord(
-        client_id=client_id,
-        period_id=period_id,
-        related_entry_id=related_entry_id,
-        type=exception_type,
-        severity=severity,
-        status=ExceptionStatus.OPEN,
-        description=description,
-        detected_by=detected_by,
-    )
-    db.add(record)
-    db.flush()
-    return record
-
-
-def log_tool_invocation(
-    db: Session,
-    *,
-    workflow_run_id: UUID,
-    tool_name: str,
-    input_json: dict,
-    output_json: dict,
-    model: str | None,
-    skill_version: str | None,
-    duration_ms: int,
-) -> ToolInvocation:
-    invocation = ToolInvocation(
-        workflow_run_id=workflow_run_id,
-        tool_name=tool_name,
-        input_json=input_json,
-        output_json=output_json,
-        model=model,
-        skill_version=skill_version,
-        duration_ms=duration_ms,
-    )
-    db.add(invocation)
-    db.flush()
-    return invocation
-
-
-def log_audit_event(
-    db: Session,
-    *,
-    client_id: UUID | None,
-    event_type: str,
-    actor_id: UUID | None,
-    actor_type: ActorType,
-    entity_type: str,
-    entity_id: UUID,
-    before: dict | None = None,
-    after: dict | None = None,
-) -> AuditEvent:
-    event = AuditEvent(
-        client_id=client_id,
-        event_type=event_type,
-        actor_id=actor_id,
-        actor_type=actor_type,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        before_json=before,
-        after_json=after,
-    )
-    db.add(event)
-    db.flush()
-    return event
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)

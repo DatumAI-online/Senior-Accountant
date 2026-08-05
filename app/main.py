@@ -11,7 +11,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
+from app.api.routes_agent_copilot import router as agent_copilot_router
 from app.api.routes_agent_intake import router as agent_intake_router
+from app.api.routes_agent_reconciliation import router as agent_reconciliation_router
+from app.api.routes_agent_reporting import router as agent_reporting_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_cpa_review import router as cpa_review_router
 from app.core.config import get_settings
@@ -44,6 +47,9 @@ app.add_middleware(
 app.include_router(router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(agent_intake_router, prefix="/api/v1")
+app.include_router(agent_reconciliation_router, prefix="/api/v1")
+app.include_router(agent_copilot_router, prefix="/api/v1")
+app.include_router(agent_reporting_router, prefix="/api/v1")
 app.include_router(cpa_review_router, prefix="/api/v1")
 
 

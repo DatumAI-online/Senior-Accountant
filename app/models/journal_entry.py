@@ -1,7 +1,7 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, Numeric, String, Text
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -35,6 +35,14 @@ class ProposedJournalEntry(Base, UUIDPrimaryKeyMixin):
     )
     description: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # The business/transaction date (e.g. from the source document), NOT
+    # when this row was inserted. Reconciliation matching
+    # (app/agents/reconciliation_close/tools.py) compares against this, not
+    # created_at — a document processed days after the fact must still
+    # match a bank transaction dated on the actual purchase date. Falls
+    # back to created_at.date() when the source document had no
+    # extractable date.
+    entry_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     source_document_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("source_documents.id"), nullable=True
     )

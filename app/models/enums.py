@@ -35,6 +35,11 @@ class CloseStatus(str, enum.Enum):
     APPROVED = "approved"
     DELIVERED = "delivered"
 
+    @property
+    def is_terminal_approval_state(self) -> bool:
+        """States an AI service credential must never be able to write."""
+        return self in {CloseStatus.APPROVED, CloseStatus.DELIVERED}
+
 
 class GLAccountType(str, enum.Enum):
     ASSET = "asset"
@@ -136,3 +141,47 @@ class ActorType(str, enum.Enum):
     HUMAN = "human"
     AI_SERVICE = "ai_service"
     SYSTEM = "system"
+
+
+class FinancialAccountType(str, enum.Enum):
+    BANK = "bank"
+    CREDIT_CARD = "credit_card"
+    PAYROLL_CLEARING = "payroll_clearing"
+
+
+class TransactionMatchMethod(str, enum.Enum):
+    EXACT_AMOUNT_DATE = "exact_amount_date"
+    MANUAL = "manual"
+
+
+class ReconciliationStatus(str, enum.Enum):
+    IN_PROGRESS = "in_progress"
+    RECONCILED = "reconciled"
+    DISCREPANCY = "discrepancy"
+
+
+class ReconciliationItemStatus(str, enum.Enum):
+    MATCHED = "matched"
+    UNMATCHED = "unmatched"
+    UNCLEARED = "uncleared"
+
+
+class ClientQuestionStatus(str, enum.Enum):
+    DRAFTED = "drafted"
+    APPROVED_FOR_SENDING = "approved_for_sending"
+    SENT = "sent"
+    ANSWERED = "answered"
+    RESOLVED = "resolved"
+    ESCALATED = "escalated"
+
+
+class FinancialReportType(str, enum.Enum):
+    INCOME_STATEMENT = "income_statement"
+    BALANCE_SHEET = "balance_sheet"
+    CASH_SUMMARY = "cash_summary"
+
+
+class DeliverableStatus(str, enum.Enum):
+    DRAFT = "draft"
+    APPROVED = "approved"
+    DELIVERED = "delivered"

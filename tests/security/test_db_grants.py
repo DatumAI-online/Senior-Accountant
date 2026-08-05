@@ -255,3 +255,106 @@ def test_ai_service_can_perform_its_own_allowed_transition(seeded_entry):
     finally:
         conn.close()
         engine.dispose()
+
+
+@pytest.mark.parametrize("target_close_status", ["approved", "delivered"])
+def test_ai_service_cannot_write_terminal_close_status(seeded_client, target_close_status):
+    settings = get_settings()
+    engine, conn = _connect(settings.ai_service_database_url)
+    try:
+        with pytest.raises(ProgrammingError, match="datumai_ai_service may not set"):
+            conn.execute(
+                text("UPDATE accounting_periods SET close_status = :s WHERE id = :id"),
+                {"s": target_close_status, "id": seeded_client["period"].id},
+            )
+    finally:
+        conn.rollback()
+        conn.close()
+        engine.dispose()
+
+
+def test_ai_service_can_write_non_terminal_close_status(seeded_client):
+    settings = get_settings()
+    engine, conn = _connect(settings.ai_service_database_url)
+    try:
+        conn.execute(
+            text("UPDATE accounting_periods SET close_status = 'reconciling' WHERE id = :id"),
+            {"id": seeded_client["period"].id},
+        )
+        conn.commit()
+        status = conn.execute(
+            text("SELECT close_status FROM accounting_periods WHERE id = :id"),
+            {"id": seeded_client["period"].id},
+        ).scalar_one()
+        assert status == "reconciling"
+    finally:
+        conn.close()
+        engine.dispose()
+
+
+def test_cpa_service_can_approve_close(seeded_client):
+    settings = get_settings()
+    engine, conn = _connect(settings.cpa_service_database_url)
+    try:
+        conn.execute(
+            text("UPDATE accounting_periods SET close_status = 'approved' WHERE id = :id"),
+            {"id": seeded_client["period"].id},
+        )
+        conn.commit()
+        status = conn.execute(
+            text("SELECT close_status FROM accounting_periods WHERE id = :id"),
+            {"id": seeded_client["period"].id},
+        ).scalar_one()
+        assert status == "approved"
+    finally:
+        conn.close()
+        engine.dispose()
+
+
+@pytest.fixture
+def seeded_financial_report(seeded_client, admin_db):
+    from app.models.enums import FinancialReportType
+    from app.models.reporting import FinancialReport
+
+    report = FinancialReport(
+        client_id=seeded_client["client"].id,
+        period_id=seeded_client["period"].id,
+        report_type=FinancialReportType.INCOME_STATEMENT,
+        data={"net_income": 100.0},
+        generated_by="reporting_insights",
+    )
+    admin_db.add(report)
+    admin_db.commit()
+    return report
+
+
+def test_ai_service_has_no_update_grant_on_financial_reports(seeded_financial_report):
+    """No column-level nuance needed here — the AI service role simply has
+    no UPDATE grant on this table at all (0004_reconciliation_reporting_
+    grants.py), so it structurally cannot set approved_by."""
+    settings = get_settings()
+    engine, conn = _connect(settings.ai_service_database_url)
+    try:
+        with pytest.raises(ProgrammingError, match="permission denied"):
+            conn.execute(
+                text("UPDATE financial_reports SET approved_by = NULL WHERE id = :id"),
+                {"id": seeded_financial_report.id},
+            )
+    finally:
+        conn.rollback()
+        conn.close()
+        engine.dispose()
+
+
+def test_cpa_service_can_update_financial_reports(seeded_financial_report, seeded_client):
+    settings = get_settings()
+    engine, conn = _connect(settings.cpa_service_database_url)
+    try:
+        conn.execute(
+            text("UPDATE financial_reports SET approved_by = :cpa_id WHERE id = :id"),
+            {"cpa_id": seeded_client["cpa_user"].id, "id": seeded_financial_report.id},
+        )
+        conn.commit()
+    finally:
+        conn.close()
+        engine.dispose()

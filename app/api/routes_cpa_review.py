@@ -24,12 +24,22 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_cpa_db, require_role
 from app.core.security import TokenPayload
-from app.models.accounting_period import GLAccount
+from app.models.accounting_period import AccountingPeriod, GLAccount
+from app.models.accounting_profile import Engagement
 from app.models.audit_event import AuditEvent
-from app.models.enums import ActorType, EntryStatus, ExceptionStatus, ReviewDecisionType, UserRole
+from app.models.enums import (
+    ActorType,
+    CloseStatus,
+    EntryStatus,
+    ExceptionStatus,
+    ReviewDecisionType,
+    UserRole,
+)
 from app.models.exception_record import ExceptionRecord
 from app.models.journal_entry import JournalEntryLine, ProposedJournalEntry
+from app.models.reporting import ExecutiveSummary, FinancialReport
 from app.models.review_decision import ReviewDecision
+from app.schemas.close import ClosePeriodActionRequest, ClosePeriodActionResponse, DeliverableApprovalResponse
 from app.schemas.review import (
     ReviewDecisionRequest,
     ReviewDecisionResponse,
@@ -37,6 +47,7 @@ from app.schemas.review import (
     ReviewQueueException,
     ReviewQueueLine,
 )
+from app.services.accounting.close_state_machine import InvalidCloseTransition, assert_close_transition_allowed
 from app.services.accounting.entry_state_machine import InvalidEntryTransition, assert_transition_allowed
 
 router = APIRouter(prefix="/cpa", tags=["cpa-review"])
@@ -203,4 +214,137 @@ def request_revision(
         payload=payload,
         to_status=EntryStatus.NEEDS_REVISION,
         decision_type=ReviewDecisionType.REVISION_REQUIRED,
+    )
+
+
+def _get_period_or_404(db: Session, period_id: uuid.UUID) -> AccountingPeriod:
+    period = db.get(AccountingPeriod, period_id)
+    if period is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Accounting period not found")
+    return period
+
+
+def _transition_close(
+    *,
+    db: Session,
+    token: TokenPayload,
+    period: AccountingPeriod,
+    to_status: CloseStatus,
+    event_type: str,
+    rationale: str,
+) -> None:
+    try:
+        assert_close_transition_allowed(
+            from_status=period.close_status, to_status=to_status, actor_role=token.role
+        )
+    except InvalidCloseTransition as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    before_status = period.close_status.value
+    period.close_status = to_status
+    db.flush()
+
+    engagement = db.get(Engagement, period.engagement_id)
+
+    db.add(
+        AuditEvent(
+            client_id=engagement.client_id if engagement else None,
+            event_type=event_type,
+            actor_id=uuid.UUID(token.sub),
+            actor_type=ActorType.HUMAN,
+            entity_type="accounting_period",
+            entity_id=period.id,
+            before_json={"close_status": before_status, "rationale": rationale},
+            after_json={"close_status": to_status.value},
+        )
+    )
+
+
+@router.post("/periods/{period_id}/start-review", response_model=ClosePeriodActionResponse)
+def start_period_review(
+    period_id: uuid.UUID,
+    token: TokenPayload = Depends(require_cpa),
+    db: Session = Depends(get_cpa_db),
+) -> ClosePeriodActionResponse:
+    period = _get_period_or_404(db, period_id)
+    _transition_close(
+        db=db,
+        token=token,
+        period=period,
+        to_status=CloseStatus.UNDER_CPA_REVIEW,
+        event_type="close.under_review",
+        rationale="CPA opened the review queue for this period.",
+    )
+    db.commit()
+    return ClosePeriodActionResponse(period_id=period.id, close_status=period.close_status.value)
+
+
+@router.post("/periods/{period_id}/approve-close", response_model=ClosePeriodActionResponse)
+def approve_close(
+    period_id: uuid.UUID,
+    payload: ClosePeriodActionRequest,
+    token: TokenPayload = Depends(require_cpa),
+    db: Session = Depends(get_cpa_db),
+) -> ClosePeriodActionResponse:
+    """Approves the monthly close as a whole — distinct from approving
+    individual entries. The Reporting & Insights Agent refuses to run
+    until this has happened (app/agents/reporting_insights/agent.py)."""
+    period = _get_period_or_404(db, period_id)
+    _transition_close(
+        db=db,
+        token=token,
+        period=period,
+        to_status=CloseStatus.APPROVED,
+        event_type="close.approved",
+        rationale=payload.rationale,
+    )
+    db.commit()
+    return ClosePeriodActionResponse(period_id=period.id, close_status=period.close_status.value)
+
+
+@router.post("/periods/{period_id}/approve-deliverable", response_model=DeliverableApprovalResponse)
+def approve_deliverable(
+    period_id: uuid.UUID,
+    payload: ClosePeriodActionRequest,
+    token: TokenPayload = Depends(require_cpa),
+    db: Session = Depends(get_cpa_db),
+) -> DeliverableApprovalResponse:
+    """The only endpoint that can set FinancialReport.approved_by /
+    ExecutiveSummary.approved_by and move close_status to DELIVERED. Note
+    that datumai_ai_service has no UPDATE grant on financial_reports or
+    executive_summaries at all (0004_reconciliation_reporting_grants.py),
+    so this isn't just an app-level check."""
+    period = _get_period_or_404(db, period_id)
+
+    reports = db.scalars(
+        select(FinancialReport).where(FinancialReport.period_id == period_id)
+    ).all()
+    summary = db.scalar(select(ExecutiveSummary).where(ExecutiveSummary.period_id == period_id))
+    if not reports or summary is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No financial reports/executive summary exist for this period yet.",
+        )
+
+    cpa_user_id = uuid.UUID(token.sub)
+    for report in reports:
+        report.approved_by = cpa_user_id
+    summary.approved_by = cpa_user_id
+    db.flush()
+
+    _transition_close(
+        db=db,
+        token=token,
+        period=period,
+        to_status=CloseStatus.DELIVERED,
+        event_type="deliverable.approved",
+        rationale=payload.rationale,
+    )
+    db.commit()
+
+    return DeliverableApprovalResponse(
+        period_id=period.id,
+        close_status=period.close_status.value,
+        approved_report_ids=[r.id for r in reports],
+        approved_summary_id=summary.id,
     )

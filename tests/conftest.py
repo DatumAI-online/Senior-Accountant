@@ -34,6 +34,15 @@ APP_TABLES = [
     "tool_invocations",
     "workflow_runs",
     "review_decisions",
+    "recommended_actions",
+    "executive_summaries",
+    "financial_reports",
+    "client_questions",
+    "reconciliation_items",
+    "reconciliations",
+    "transaction_matches",
+    "imported_transactions",
+    "financial_accounts",
     "exception_records",
     "journal_entry_lines",
     "proposed_journal_entries",
@@ -117,8 +126,9 @@ def seeded_client(admin_db):
     a dict of the created rows keyed by role, for tests to use directly."""
     from app.models.accounting_period import AccountingPeriod, GLAccount
     from app.models.accounting_profile import ClientAccountingProfile, Engagement
-    from app.models.enums import CloseStatus, GLAccountType, UserRole
+    from app.models.enums import CloseStatus, FinancialAccountType, GLAccountType, UserRole
     from app.models.organization import Client, Organization
+    from app.models.reconciliation import FinancialAccount
     from app.models.user import User
 
     org = Organization(name="Test Org")
@@ -135,7 +145,28 @@ def seeded_client(admin_db):
         role=UserRole.AI_INTAKE,
         is_service_account=True,
     )
-    admin_db.add_all([cpa_user, intake_user])
+    reconciliation_user = User(
+        organization_id=org.id,
+        email="agent-reconciliation@test.local",
+        full_name="Reconciliation Agent",
+        role=UserRole.AI_RECONCILIATION,
+        is_service_account=True,
+    )
+    copilot_user = User(
+        organization_id=org.id,
+        email="agent-copilot@test.local",
+        full_name="Copilot Agent",
+        role=UserRole.AI_COPILOT,
+        is_service_account=True,
+    )
+    reporting_user = User(
+        organization_id=org.id,
+        email="agent-reporting@test.local",
+        full_name="Reporting Agent",
+        role=UserRole.AI_REPORTING,
+        is_service_account=True,
+    )
+    admin_db.add_all([cpa_user, intake_user, reconciliation_user, copilot_user, reporting_user])
     admin_db.flush()
 
     client = Client(organization_id=org.id, legal_name="Test Client LLC", entity_type="LLC")
@@ -158,6 +189,7 @@ def seeded_client(admin_db):
     gl_accounts = {}
     for code, name, account_type in [
         ("1000", "Operating Cash", GLAccountType.ASSET),
+        ("4000", "Service Revenue", GLAccountType.REVENUE),
         ("6100", "Software and Subscriptions", GLAccountType.EXPENSE),
         ("6300", "Contract Labor", GLAccountType.EXPENSE),
     ]:
@@ -165,6 +197,15 @@ def seeded_client(admin_db):
         admin_db.add(acct)
         admin_db.flush()
         gl_accounts[code] = acct
+
+    financial_account = FinancialAccount(
+        client_id=client.id,
+        gl_account_id=gl_accounts["1000"].id,
+        account_type=FinancialAccountType.BANK,
+        institution="Test Bank",
+        mask="4242",
+    )
+    admin_db.add(financial_account)
 
     admin_db.commit()
 
@@ -174,8 +215,12 @@ def seeded_client(admin_db):
         "engagement": engagement,
         "period": period,
         "gl_accounts": gl_accounts,
+        "financial_account": financial_account,
         "cpa_user": cpa_user,
         "intake_user": intake_user,
+        "reconciliation_user": reconciliation_user,
+        "copilot_user": copilot_user,
+        "reporting_user": reporting_user,
     }
 
 
@@ -196,6 +241,36 @@ def cpa_token(seeded_client):
     user = seeded_client["cpa_user"]
     return create_access_token(
         user_id=user.id, email=user.email, role=user.role, is_service_account=False
+    )
+
+
+@pytest.fixture
+def reconciliation_token(seeded_client):
+    from app.core.security import create_access_token
+
+    user = seeded_client["reconciliation_user"]
+    return create_access_token(
+        user_id=user.id, email=user.email, role=user.role, is_service_account=True
+    )
+
+
+@pytest.fixture
+def copilot_token(seeded_client):
+    from app.core.security import create_access_token
+
+    user = seeded_client["copilot_user"]
+    return create_access_token(
+        user_id=user.id, email=user.email, role=user.role, is_service_account=True
+    )
+
+
+@pytest.fixture
+def reporting_token(seeded_client):
+    from app.core.security import create_access_token
+
+    user = seeded_client["reporting_user"]
+    return create_access_token(
+        user_id=user.id, email=user.email, role=user.role, is_service_account=True
     )
 
 

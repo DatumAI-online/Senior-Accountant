@@ -4,10 +4,19 @@ Alembic autogeneration and for the security test suite's table enumeration."""
 from app.models.accounting_period import AccountingPeriod, GLAccount
 from app.models.accounting_profile import ClientAccountingProfile, Engagement
 from app.models.audit_event import AuditEvent
+from app.models.client_question import ClientQuestion
 from app.models.document import ExtractedDocumentData, SourceDocument
 from app.models.exception_record import ExceptionRecord
 from app.models.journal_entry import JournalEntryLine, ProposedJournalEntry
 from app.models.organization import Client, Organization
+from app.models.reconciliation import (
+    FinancialAccount,
+    ImportedTransaction,
+    Reconciliation,
+    ReconciliationItem,
+    TransactionMatch,
+)
+from app.models.reporting import ExecutiveSummary, FinancialReport, RecommendedAction
 from app.models.review_decision import ReviewDecision
 from app.models.user import User
 from app.models.workflow import ToolInvocation, WorkflowRun
@@ -18,6 +27,7 @@ __all__ = [
     "ClientAccountingProfile",
     "Engagement",
     "AuditEvent",
+    "ClientQuestion",
     "ExtractedDocumentData",
     "SourceDocument",
     "ExceptionRecord",
@@ -25,6 +35,14 @@ __all__ = [
     "ProposedJournalEntry",
     "Client",
     "Organization",
+    "FinancialAccount",
+    "ImportedTransaction",
+    "Reconciliation",
+    "ReconciliationItem",
+    "TransactionMatch",
+    "ExecutiveSummary",
+    "FinancialReport",
+    "RecommendedAction",
     "ReviewDecision",
     "User",
     "ToolInvocation",
