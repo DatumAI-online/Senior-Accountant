@@ -21,16 +21,23 @@ audit_events are made unconditionally append-only via a second trigger
 that rejects UPDATE/DELETE from any role, including the schema owner,
 short of a deliberate DROP TRIGGER by a superuser.
 
-Passwords below are development defaults matching app/core/config.py's
-defaults. In any real environment these must be generated secrets injected
-via the deployment's secrets manager, never committed — see Section 10.1's
-"Secrets management" note and Section 11's outstanding-review flag.
+Role passwords are read from the SAME environment variables the app itself
+uses to connect (AI_SERVICE_DATABASE_URL / CPA_SERVICE_DATABASE_URL) —
+never hardcoded here — so there is exactly one place to set each secret in
+any real deployment, with no risk of the migration and the app drifting
+out of sync. If those env vars aren't set (plain local dev), this falls
+back to the same fixed dev-only passwords documented in .env.example.
+Never commit a real deployment's actual password anywhere in this repo —
+see Section 10.1's "Secrets management" note and Section 11's
+outstanding-review flag.
 
 Revision ID: 0002
 Revises: 0001
 Create Date: 2026-08-04
 """
+import os
 from typing import Sequence, Union
+from urllib.parse import urlparse
 
 from alembic import op
 
@@ -42,10 +49,28 @@ depends_on: Union[str, Sequence[str], None] = None
 AI_SERVICE_ROLE = "datumai_ai_service"
 CPA_SERVICE_ROLE = "datumai_cpa_service"
 
-# Dev-only defaults — must match Settings.ai_service_database_url /
-# Settings.cpa_service_database_url in app/core/config.py.
-AI_SERVICE_PASSWORD = "datumai_ai_service_dev_pw"
-CPA_SERVICE_PASSWORD = "datumai_cpa_service_dev_pw"
+
+def _password_from_env_url(env_var: str, dev_default: str) -> str:
+    """Pull the role password out of the connection URL the app itself
+    will use (AI_SERVICE_DATABASE_URL / CPA_SERVICE_DATABASE_URL), so the
+    migration and the running app can never disagree about the secret.
+    Falls back to the fixed local-dev default when the env var isn't set."""
+    url = os.environ.get(env_var)
+    if not url:
+        return dev_default
+    parsed = urlparse(url)
+    return parsed.password or dev_default
+
+
+# Dev-only fallback values — match app/core/config.py's Settings defaults.
+# Any real deployment sets AI_SERVICE_DATABASE_URL / CPA_SERVICE_DATABASE_URL
+# with a real generated password and this picks it up automatically.
+AI_SERVICE_PASSWORD = _password_from_env_url(
+    "AI_SERVICE_DATABASE_URL", "datumai_ai_service_dev_pw"
+)
+CPA_SERVICE_PASSWORD = _password_from_env_url(
+    "CPA_SERVICE_DATABASE_URL", "datumai_cpa_service_dev_pw"
+)
 
 # Tables both service roles may at least SELECT (reference/context data).
 READ_ONLY_REFERENCE_TABLES = [
