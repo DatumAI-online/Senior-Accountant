@@ -15,6 +15,7 @@ Run with:
 
 from __future__ import annotations
 
+import os
 import sys
 from datetime import datetime, timezone
 
@@ -30,7 +31,14 @@ from app.models.organization import Client, Organization
 from app.models.user import User
 
 DEMO_CPA_EMAIL = "cpa@datumai.dev"
-DEMO_CPA_PASSWORD = "change-me-dev-only"  # noqa: S105 — dev fixture, not a real secret
+
+# Read from the environment so a real deployment can set a real password
+# without it sitting in this public repo — this script's source is public,
+# so anyone could read a hardcoded value and log in as the CPA. Falls back
+# to the fixed dev value only when DEMO_CPA_PASSWORD isn't set.
+_DEV_FALLBACK_PASSWORD = "change-me-dev-only"  # noqa: S105 — dev fixture, not a real secret
+DEMO_CPA_PASSWORD = os.environ.get("DEMO_CPA_PASSWORD", _DEV_FALLBACK_PASSWORD)
+_USING_DEV_FALLBACK_PASSWORD = DEMO_CPA_PASSWORD == _DEV_FALLBACK_PASSWORD
 
 AGENT_SEED_ACCOUNTS = [
     (UserRole.AI_INTAKE, "agent-intake@datumai.dev", "Intake Bookkeeper Agent"),
@@ -152,6 +160,12 @@ def main() -> int:
         print()
         print(f"CPA login:         {DEMO_CPA_EMAIL} / {DEMO_CPA_PASSWORD}")
         print("  -> POST /api/v1/auth/login to get a short-lived CPA token")
+        if _USING_DEV_FALLBACK_PASSWORD:
+            print(
+                "  !! Using the default dev password, which is public in this repo's "
+                "source. Set DEMO_CPA_PASSWORD before seeding any deployment other "
+                "than a local sandbox."
+            )
         print()
         print("AI agent service tokens (30-day expiry, dev only):")
         for role_value, token in service_tokens.items():
